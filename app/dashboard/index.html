@@ -332,6 +332,16 @@
         </div>
     </div>
 
+    <!-- Broker Login Status Banner -->
+    <div id="brokerBanner" style="padding:8px 24px; font-size:13px; display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--border);">
+        <span style="font-weight:600; color:var(--text-dim)">Broker:</span>
+        <span id="brokerStatus" style="color:var(--orange)">Checking...</span>
+        <span style="color:var(--text-dim)">|</span>
+        <span style="font-weight:600; color:var(--text-dim)">Account:</span>
+        <span id="brokerUser" style="color:var(--text)">--</span>
+        <span id="brokerLoginDot" style="width:8px;height:8px;border-radius:50%;background:var(--orange);display:inline-block;margin-left:4px"></span>
+    </div>
+
     <div class="main">
         <!-- Controls -->
         <div class="card full-width">
@@ -653,6 +663,24 @@
             const mode = data.trading_mode || 'paper';
             document.getElementById('btnPaper').classList.toggle('active', mode === 'paper');
             document.getElementById('btnLive').classList.toggle('active', mode === 'live');
+
+            // Broker login status
+            const bi = data.broker_info || {};
+            const brokerStatusEl = document.getElementById('brokerStatus');
+            const brokerUserEl = document.getElementById('brokerUser');
+            const brokerDot = document.getElementById('brokerLoginDot');
+            if (bi.broker) {
+                brokerStatusEl.textContent = bi.broker;
+                brokerUserEl.textContent = bi.user_id || '--';
+                if (bi.logged_in) {
+                    brokerStatusEl.style.color = mode === 'live' ? 'var(--green)' : 'var(--orange)';
+                    brokerDot.style.background = mode === 'live' ? 'var(--green)' : 'var(--orange)';
+                } else {
+                    brokerStatusEl.style.color = 'var(--red)';
+                    brokerDot.style.background = 'var(--red)';
+                    brokerUserEl.textContent = 'NOT LOGGED IN';
+                }
+            }
 
             // Stats
             const risk = data.risk || {};

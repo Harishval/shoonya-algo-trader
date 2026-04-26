@@ -125,6 +125,21 @@ async def strategy_loop():
                     if chain:
                         option_chains[inst] = [c.model_dump() for c in chain[:15]]
 
+                # Determine broker type for login status
+                broker_type = type(broker).__name__
+                if broker_type == "ShoonyaBroker":
+                    broker_info = {
+                        "logged_in": broker.is_logged_in,
+                        "user_id": settings.shoonya_user_id if broker.is_logged_in else "",
+                        "broker": "Shoonya (Live)",
+                    }
+                else:
+                    broker_info = {
+                        "logged_in": True,
+                        "user_id": "Paper Account",
+                        "broker": "Paper Trading (Simulated)",
+                    }
+
                 dashboard = {
                     "type": "dashboard_update",
                     "timestamp": datetime.now().isoformat(),
@@ -134,6 +149,7 @@ async def strategy_loop():
                     "option_chains": option_chains,
                     "risk": risk_manager.get_stats() if risk_manager else {},
                     "capital": settings.capital,
+                    "broker_info": broker_info,
                 }
                 await broadcast(dashboard)
 
