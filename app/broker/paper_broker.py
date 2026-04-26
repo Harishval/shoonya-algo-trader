@@ -14,12 +14,12 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Simulated base prices for indices
+# Simulated base prices for indices (updated to approximate market levels)
 SIMULATED_PRICES = {
-    "NIFTY": 24500.0,
-    "BANKNIFTY": 52000.0,
-    "FINNIFTY": 23800.0,
-    "SENSEX": 80500.0,
+    "NIFTY": 23900.0,
+    "BANKNIFTY": 55200.0,
+    "FINNIFTY": 23500.0,
+    "SENSEX": 76660.0,
     "BANKEX": 55000.0,
 }
 

@@ -78,6 +78,7 @@ class ShoonyaBroker:
         self._ws_connected = False
         self._market_data: Dict[str, MarketData] = {}
         self._callbacks: Dict[str, Any] = {}
+        self._last_prices: Dict[str, float] = {}  # cache last known prices
 
     def login(self) -> bool:
         """Login to Shoonya using TOTP."""
@@ -107,20 +108,31 @@ class ShoonyaBroker:
             return False
 
     def get_underlying_ltp(self, instrument: str) -> Optional[float]:
-        """Get the last traded price of the underlying index."""
+        """Get the last traded price of the underlying index.
+
+        Caches the last known price so it's available when markets are closed.
+        Falls back to the close price field if the live price is unavailable.
+        """
         try:
             exchange = UNDERLYING_EXCHANGE.get(instrument, "NSE")
             token = UNDERLYING_TOKEN.get(instrument)
             if not token:
-                return None
+                return self._last_prices.get(instrument)
 
             ret = self.api.get_quotes(exchange=exchange, token=token)
             if ret and ret.get("stat") == "Ok":
-                return float(ret.get("lp", 0))
-            return None
+                # Try live price first, then close price
+                price = float(ret.get("lp", 0))
+                if price <= 0:
+                    price = float(ret.get("c", 0))  # close price
+                if price > 0:
+                    self._last_prices[instrument] = price
+                    return price
+
+            return self._last_prices.get(instrument)
         except Exception as e:
             logger.error("Error fetching LTP for %s: %s", instrument, e)
-            return None
+            return self._last_prices.get(instrument)
 
     def get_atm_strike(self, instrument: str, ltp: float) -> float:
         """Calculate the ATM strike from LTP."""

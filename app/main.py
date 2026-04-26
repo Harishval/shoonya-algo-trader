@@ -35,27 +35,42 @@ ws_clients: List[WebSocket] = []
 _strategy_task = None
 
 
-def init_broker():
-    """Initialize the appropriate broker based on trading mode."""
+def init_broker() -> str:
+    """Initialize the appropriate broker based on trading mode.
+
+    Returns a status message describing the result.
+    """
     global broker, strategy, risk_manager
 
+    status_msg = ""
     if settings.trading_mode == "live":
         from app.broker.shoonya_broker import ShoonyaBroker
         broker = ShoonyaBroker()
         success = broker.login()
         if not success:
             logger.error("Live broker login failed — falling back to paper mode")
+            settings.trading_mode = "paper"
             from app.broker.paper_broker import PaperBroker
             broker = PaperBroker()
             broker.login()
+            status_msg = (
+                "LIVE login failed — fell back to PAPER mode. "
+                "Check your Shoonya credentials in .env "
+                "(user_id, password, totp_secret, vendor_code, api_secret). "
+                "Markets may also be closed."
+            )
+        else:
+            status_msg = "Connected to Shoonya LIVE"
     else:
         from app.broker.paper_broker import PaperBroker
         broker = PaperBroker()
         broker.login()
+        status_msg = "Paper trading mode active (simulated prices)"
 
     risk_manager = RiskManager()
     strategy = DirectionalOTMStrategy(broker, risk_manager)
     logger.info("Broker initialized in %s mode", settings.trading_mode)
+    return status_msg
 
 
 @asynccontextmanager
@@ -188,10 +203,10 @@ async def handle_ws_message(msg: dict, ws: WebSocket):
     elif action == "switch_mode":
         mode = msg.get("mode", "paper")
         settings.trading_mode = mode
-        init_broker()
+        status_msg = init_broker()
         await ws.send_text(json.dumps({
             "type": "status",
-            "message": f"Switched to {mode} mode",
+            "message": status_msg,
         }))
 
     elif action == "get_state":
