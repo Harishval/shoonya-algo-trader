@@ -91,8 +91,11 @@ async def strategy_loop():
     """Background loop that ticks the strategy and broadcasts state."""
     while True:
         try:
-            if strategy and strategy.state == StrategyState.RUNNING:
-                state = strategy.tick()
+            if strategy:
+                if strategy.state == StrategyState.RUNNING:
+                    state = strategy.tick()
+                else:
+                    state = strategy._get_state()
 
                 # Build dashboard data
                 market_data = {}
