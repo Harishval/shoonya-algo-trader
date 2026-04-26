@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shoonya Algo Trader</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e1e4eb;
+            --text-dim: #8b8fa3;
+            --green: #00c853;
+            --red: #ff1744;
+            --blue: #2196f3;
+            --orange: #ff9800;
+            --purple: #9c27b0;
+            --accent: #7c4dff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .header .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .status-pill {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .pill-paper { background: rgba(255, 152, 0, 0.2); color: var(--orange); }
+        .pill-live { background: rgba(0, 200, 83, 0.2); color: var(--green); }
+        .pill-running { background: rgba(0, 200, 83, 0.2); color: var(--green); }
+        .pill-stopped { background: rgba(255, 23, 68, 0.2); color: var(--red); }
+        .pill-idle { background: rgba(139, 143, 163, 0.2); color: var(--text-dim); }
+        .pill-paused { background: rgba(255, 152, 0, 0.2); color: var(--orange); }
+
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 4px;
+        }
+        .mode-btn {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-dim);
+            background: transparent;
+            transition: all 0.2s;
+        }
+        .mode-btn.active {
+            background: var(--accent);
+            color: white;
+        }
+        .mode-btn:hover:not(.active) { color: var(--text); }
+
+        .main {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            padding: 16px 24px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        .full-width { grid-column: 1 / -1; }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .card h2 {
+            font-size: 14px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+        .stat-item {
+            text-align: center;
+            padding: 12px 8px;
+            background: var(--bg);
+            border-radius: 8px;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+        .neutral { color: var(--text); }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-start { background: var(--green); color: #000; }
+        .btn-stop { background: var(--red); color: #fff; }
+        .btn-pause { background: var(--orange); color: #000; }
+        .btn-exit { background: #333; color: var(--red); border: 1px solid var(--red); }
+        .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        /* Tables */
+        .table-wrap { overflow-x: auto; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            text-align: left;
+            padding: 8px 10px;
+            color: var(--text-dim);
+            font-weight: 500;
+            border-bottom: 1px solid var(--border);
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        td {
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(42, 45, 58, 0.5);
+        }
+        tr:hover { background: rgba(124, 77, 255, 0.05); }
+
+        /* Option Chain */
+        .chain-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .chain-tab {
+            padding: 6px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            background: transparent;
+            color: var(--text-dim);
+            transition: all 0.2s;
+        }
+        .chain-tab.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+        .chain-table td.ce { color: var(--green); }
+        .chain-table td.pe { color: var(--red); }
+        .chain-table td.atm { background: rgba(124, 77, 255, 0.1); font-weight: 700; }
+
+        /* Config Panel */
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .config-item label {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+        .config-item input, .config-item select {
+            padding: 8px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 13px;
+        }
+        .config-item input:focus, .config-item select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Chart */
+        .chart-container {
+            height: 200px;
+            position: relative;
+        }
+
+        /* Signals */
+        .signal-grid {
+            display: flex;
+            gap: 16px;
+        }
+        .signal-card {
+            flex: 1;
+            padding: 16px;
+            background: var(--bg);
+            border-radius: 8px;
+            text-align: center;
+        }
+        .signal-card .instrument {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .signal-card .ltp {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .signal-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .signal-bullish { background: rgba(0,200,83,0.2); color: var(--green); }
+        .signal-bearish { background: rgba(255,23,68,0.2); color: var(--red); }
+        .signal-neutral { background: rgba(139,143,163,0.2); color: var(--text-dim); }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            background: var(--card);
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 1000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+        .toast.show { transform: translateY(0); opacity: 1; }
+
+        /* Logs */
+        .log-panel {
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 12px;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .log-entry {
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(42, 45, 58, 0.3);
+        }
+        .log-time { color: var(--text-dim); }
+        .log-info { color: var(--blue); }
+        .log-trade { color: var(--green); }
+        .log-warn { color: var(--orange); }
+        .log-error { color: var(--red); }
+
+        @media (max-width: 768px) {
+            .main { grid-template-columns: 1fr; padding: 8px; }
+            .header { flex-direction: column; gap: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>SHOONYA ALGO TRADER</h1>
+        <div class="status-bar">
+            <span id="strategyStatus" class="status-pill pill-idle">IDLE</span>
+            <div class="mode-toggle">
+                <button class="mode-btn active" id="btnPaper" onclick="switchMode('paper')">PAPER</button>
+                <button class="mode-btn" id="btnLive" onclick="switchMode('live')">LIVE</button>
+            </div>
+            <span id="connectionStatus" class="status-pill pill-stopped">DISCONNECTED</span>
+        </div>
+    </div>
+
+    <div class="main">
+        <!-- Controls -->
+        <div class="card full-width">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px">
+                <div class="controls">
+                    <button class="btn btn-start" id="btnStart" onclick="sendAction('start')">&#9654; Start</button>
+                    <button class="btn btn-pause" id="btnPause" onclick="sendAction('pause')">&#10074;&#10074; Pause</button>
+                    <button class="btn btn-start" id="btnResume" onclick="sendAction('resume')" style="display:none">&#9654; Resume</button>
+                    <button class="btn btn-stop" id="btnStop" onclick="sendAction('stop')">&#9632; Stop</button>
+                    <button class="btn btn-exit" id="btnExitAll" onclick="exitAll()">Exit All Positions</button>
+                </div>
+                <div style="font-size:12px; color:var(--text-dim)">
+                    <span id="clockDisplay"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="card full-width">
+            <h2>Performance</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="dailyPnl">₹0.00</div>
+                    <div class="stat-label">Daily P&L</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value neutral" id="capital">₹0</div>
+                    <div class="stat-label">Capital</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value neutral" id="totalTrades">0</div>
+                    <div class="stat-label">Total Trades</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value positive" id="winTrades">0</div>
+                    <div class="stat-label">Winners</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value negative" id="loseTrades">0</div>
+                    <div class="stat-label">Losers</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value neutral" id="winRate">0%</div>
+                    <div class="stat-label">Win Rate</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="maxLoss">₹0</div>
+                    <div class="stat-label">Max Loss Limit</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="targetProfit">₹0</div>
+                    <div class="stat-label">Target Profit</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Signals -->
+        <div class="card full-width">
+            <h2>Market Signals</h2>
+            <div class="signal-grid" id="signalGrid">
+                <div class="signal-card">
+                    <div class="instrument">NIFTY</div>
+                    <div class="ltp" id="ltp-NIFTY">--</div>
+                    <span class="signal-badge signal-neutral" id="sig-NIFTY">WAITING</span>
+                </div>
+                <div class="signal-card">
+                    <div class="instrument">SENSEX</div>
+                    <div class="ltp" id="ltp-SENSEX">--</div>
+                    <span class="signal-badge signal-neutral" id="sig-SENSEX">WAITING</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- P&L Chart -->
+        <div class="card full-width">
+            <h2>P&L Chart</h2>
+            <div class="chart-container">
+                <canvas id="pnlChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Active Positions -->
+        <div class="card full-width">
+            <h2>Active Positions</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Instrument</th>
+                            <th>Strike</th>
+                            <th>Type</th>
+                            <th>Qty</th>
+                            <th>Entry</th>
+                            <th>SL</th>
+                            <th>Target</th>
+                            <th>P&L</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positionsBody">
+                        <tr><td colspan="10" style="text-align:center; color:var(--text-dim)">No open positions</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Option Chain -->
+        <div class="card full-width">
+            <h2>Option Chain</h2>
+            <div class="chain-tabs" id="chainTabs">
+                <button class="chain-tab active" onclick="selectChain('NIFTY')">NIFTY</button>
+                <button class="chain-tab" onclick="selectChain('SENSEX')">SENSEX</button>
+            </div>
+            <div class="table-wrap">
+                <table class="chain-table">
+                    <thead>
+                        <tr>
+                            <th>CE OI</th>
+                            <th>CE Vol</th>
+                            <th>CE IV</th>
+                            <th>CE LTP</th>
+                            <th>STRIKE</th>
+                            <th>PE LTP</th>
+                            <th>PE IV</th>
+                            <th>PE Vol</th>
+                            <th>PE OI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="chainBody">
+                        <tr><td colspan="9" style="text-align:center; color:var(--text-dim)">Waiting for data...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Trade History -->
+        <div class="card full-width">
+            <h2>Trade History</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Time</th>
+                            <th>Instrument</th>
+                            <th>Strike</th>
+                            <th>Type</th>
+                            <th>Entry</th>
+                            <th>Exit</th>
+                            <th>Qty</th>
+                            <th>P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesBody">
+                        <tr><td colspan="9" style="text-align:center; color:var(--text-dim)">No trades yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Configuration -->
+        <div class="card full-width">
+            <h2>Strategy Configuration</h2>
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>Target Profit %</label>
+                    <input type="number" id="cfgTarget" value="2.0" step="0.1" min="0.1">
+                </div>
+                <div class="config-item">
+                    <label>Max Loss %</label>
+                    <input type="number" id="cfgMaxLoss" value="1.0" step="0.1" min="0.1">
+                </div>
+                <div class="config-item">
+                    <label>OTM Strike Offset</label>
+                    <input type="number" id="cfgOffset" value="2" step="1" min="1" max="10">
+                </div>
+                <div class="config-item">
+                    <label>Max Open Positions</label>
+                    <input type="number" id="cfgMaxPos" value="4" step="1" min="1" max="20">
+                </div>
+                <div class="config-item">
+                    <label>Trailing SL %</label>
+                    <input type="number" id="cfgTrailSL" value="0.5" step="0.1" min="0.1">
+                </div>
+                <div class="config-item">
+                    <label>Instruments</label>
+                    <input type="text" id="cfgInstruments" value="NIFTY,SENSEX">
+                </div>
+            </div>
+            <div style="margin-top:12px">
+                <button class="btn btn-start" onclick="updateConfig()">Apply Configuration</button>
+            </div>
+        </div>
+
+        <!-- Logs -->
+        <div class="card full-width">
+            <h2>Activity Log</h2>
+            <div class="log-panel" id="logPanel"></div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let ws = null;
+        let pnlChart = null;
+        let selectedChain = 'NIFTY';
+        let currentMode = 'paper';
+        let reconnectTimer = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initChart();
+            connectWS();
+            updateClock();
+            setInterval(updateClock, 1000);
+        });
+
+        function connectWS() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById('connectionStatus').textContent = 'CONNECTED';
+                document.getElementById('connectionStatus').className = 'status-pill pill-running';
+                addLog('Connected to server', 'info');
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            };
+
+            ws.onclose = () => {
+                document.getElementById('connectionStatus').textContent = 'DISCONNECTED';
+                document.getElementById('connectionStatus').className = 'status-pill pill-stopped';
+                addLog('Disconnected — reconnecting...', 'warn');
+                reconnectTimer = setTimeout(connectWS, 3000);
+            };
+
+            ws.onerror = () => {
+                addLog('WebSocket error', 'error');
+            };
+
+            ws.onmessage = (evt) => {
+                try {
+                    const data = JSON.parse(evt.data);
+                    if (data.type === 'dashboard_update') {
+                        updateDashboard(data);
+                    } else if (data.type === 'status') {
+                        showToast(data.message);
+                        addLog(data.message, 'info');
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                }
+            };
+        }
+
+        function sendAction(action) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action }));
+            }
+        }
+
+        function exitAll() {
+            if (confirm('Exit ALL open positions?')) {
+                sendAction('exit_all');
+            }
+        }
+
+        function switchMode(mode) {
+            if (mode === 'live') {
+                if (!confirm('Switch to LIVE trading? Real money will be used!')) return;
+            }
+            currentMode = mode;
+            document.getElementById('btnPaper').classList.toggle('active', mode === 'paper');
+            document.getElementById('btnLive').classList.toggle('active', mode === 'live');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'switch_mode', mode }));
+            }
+        }
+
+        function selectChain(instrument) {
+            selectedChain = instrument;
+            document.querySelectorAll('.chain-tab').forEach(t => {
+                t.classList.toggle('active', t.textContent === instrument);
+            });
+        }
+
+        function updateConfig() {
+            const config = {
+                target_profit_percent: parseFloat(document.getElementById('cfgTarget').value),
+                max_loss_percent: parseFloat(document.getElementById('cfgMaxLoss').value),
+                otm_strike_offset: parseInt(document.getElementById('cfgOffset').value),
+                max_open_positions: parseInt(document.getElementById('cfgMaxPos').value),
+                trailing_sl_percent: parseFloat(document.getElementById('cfgTrailSL').value),
+                instruments: document.getElementById('cfgInstruments').value.split(',').map(s => s.trim()),
+            };
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'update_config', config }));
+            }
+            showToast('Configuration applied');
+        }
+
+        function updateDashboard(data) {
+            // Strategy state
+            const stState = data.strategy?.state || 'IDLE';
+            const stEl = document.getElementById('strategyStatus');
+            stEl.textContent = stState;
+            stEl.className = 'status-pill pill-' + stState.toLowerCase();
+
+            // Update buttons
+            const isRunning = stState === 'RUNNING';
+            const isPaused = stState === 'PAUSED';
+            document.getElementById('btnStart').style.display = (isRunning || isPaused) ? 'none' : '';
+            document.getElementById('btnPause').style.display = isRunning ? '' : 'none';
+            document.getElementById('btnResume').style.display = isPaused ? '' : 'none';
+            document.getElementById('btnStop').disabled = stState === 'IDLE' || stState === 'STOPPED';
+
+            // Trading mode
+            const mode = data.trading_mode || 'paper';
+            document.getElementById('btnPaper').classList.toggle('active', mode === 'paper');
+            document.getElementById('btnLive').classList.toggle('active', mode === 'live');
+
+            // Stats
+            const risk = data.risk || {};
+            const pnl = risk.daily_pnl || 0;
+            const pnlEl = document.getElementById('dailyPnl');
+            pnlEl.textContent = '₹' + pnl.toFixed(2);
+            pnlEl.className = 'stat-value ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral');
+
+            document.getElementById('capital').textContent = '₹' + (data.capital || 0).toLocaleString();
+            document.getElementById('totalTrades').textContent = risk.daily_trades || 0;
+            document.getElementById('winTrades').textContent = risk.daily_wins || 0;
+            document.getElementById('loseTrades').textContent = risk.daily_losses || 0;
+            document.getElementById('winRate').textContent = (risk.win_rate || 0) + '%';
+            document.getElementById('maxLoss').textContent = '₹' + (risk.max_loss_amount || 0).toFixed(0);
+            document.getElementById('targetProfit').textContent = '₹' + (risk.target_profit_amount || 0).toFixed(0);
+
+            // Signals & Market Data
+            const md = data.market_data || {};
+            const signals = data.strategy?.signals || {};
+            for (const [inst, info] of Object.entries(md)) {
+                const ltpEl = document.getElementById('ltp-' + inst);
+                if (ltpEl) ltpEl.textContent = '₹' + (info.ltp || 0).toFixed(2);
+                const sigEl = document.getElementById('sig-' + inst);
+                if (sigEl) {
+                    const sig = signals[inst] || 'NEUTRAL';
+                    sigEl.textContent = sig;
+                    sigEl.className = 'signal-badge signal-' + sig.toLowerCase();
+                }
+            }
+
+            // Active Positions
+            const active = data.strategy?.active_trades || [];
+            const posBody = document.getElementById('positionsBody');
+            if (active.length === 0) {
+                posBody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-dim)">No open positions</td></tr>';
+            } else {
+                posBody.innerHTML = active.map(t => {
+                    const pnlClass = (t.pnl || 0) >= 0 ? 'positive' : 'negative';
+                    return `<tr>
+                        <td>${t.trade_id}</td>
+                        <td>${t.instrument}</td>
+                        <td>${t.strike}</td>
+                        <td>${t.option_type}</td>
+                        <td>${t.quantity}</td>
+                        <td>₹${(t.entry_price || 0).toFixed(2)}</td>
+                        <td>₹${(t.stop_loss || 0).toFixed(2)}</td>
+                        <td>₹${(t.target || 0).toFixed(2)}</td>
+                        <td class="${pnlClass}">₹${(t.pnl || 0).toFixed(2)}</td>
+                        <td>${formatTime(t.timestamp)}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            // Option Chain
+            const chains = data.option_chains || {};
+            const chainData = chains[selectedChain] || [];
+            const chainBody = document.getElementById('chainBody');
+            if (chainData.length === 0) {
+                chainBody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-dim)">Waiting for data...</td></tr>';
+            } else {
+                const spotLtp = md[selectedChain]?.ltp || 0;
+                chainBody.innerHTML = chainData.map(c => {
+                    const isATM = Math.abs(c.strike - spotLtp) < (selectedChain === 'SENSEX' ? 100 : 50);
+                    const cls = isATM ? 'atm' : '';
+                    return `<tr>
+                        <td class="ce">${(c.ce_oi || 0).toLocaleString()}</td>
+                        <td class="ce">${(c.ce_volume || 0).toLocaleString()}</td>
+                        <td class="ce">${(c.ce_iv || 0).toFixed(1)}%</td>
+                        <td class="ce" style="font-weight:600">₹${(c.ce_ltp || 0).toFixed(2)}</td>
+                        <td class="${cls}" style="text-align:center;font-weight:700">${c.strike}</td>
+                        <td class="pe" style="font-weight:600">₹${(c.pe_ltp || 0).toFixed(2)}</td>
+                        <td class="pe">${(c.pe_iv || 0).toFixed(1)}%</td>
+                        <td class="pe">${(c.pe_volume || 0).toLocaleString()}</td>
+                        <td class="pe">${(c.pe_oi || 0).toLocaleString()}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            // Trade History
+            const closed = data.strategy?.closed_trades || [];
+            const trBody = document.getElementById('tradesBody');
+            if (closed.length === 0) {
+                trBody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-dim)">No trades yet</td></tr>';
+            } else {
+                trBody.innerHTML = closed.slice().reverse().map(t => {
+                    const pnlClass = (t.pnl || 0) >= 0 ? 'positive' : 'negative';
+                    return `<tr>
+                        <td>${t.trade_id}</td>
+                        <td>${formatTime(t.timestamp)}</td>
+                        <td>${t.instrument}</td>
+                        <td>${t.strike}</td>
+                        <td>${t.option_type}</td>
+                        <td>₹${(t.entry_price || 0).toFixed(2)}</td>
+                        <td>₹${(t.exit_price || 0).toFixed(2)}</td>
+                        <td>${t.quantity}</td>
+                        <td class="${pnlClass}">₹${(t.pnl || 0).toFixed(2)}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            // P&L Chart
+            const pnlHistory = data.strategy?.pnl_history || [];
+            updateChart(pnlHistory);
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('pnlChart').getContext('2d');
+            pnlChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'P&L',
+                        data: [],
+                        borderColor: '#7c4dff',
+                        backgroundColor: 'rgba(124, 77, 255, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            grid: { color: 'rgba(42,45,58,0.5)' },
+                            ticks: { color: '#8b8fa3', maxTicksLimit: 10 },
+                        },
+                        y: {
+                            display: true,
+                            grid: { color: 'rgba(42,45,58,0.5)' },
+                            ticks: {
+                                color: '#8b8fa3',
+                                callback: v => '₹' + v.toFixed(0),
+                            },
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateChart(history) {
+            if (!pnlChart || history.length === 0) return;
+            const labels = history.map(h => {
+                const d = new Date(h.timestamp);
+                return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            });
+            const values = history.map(h => h.pnl);
+
+            // Color based on P&L
+            const lastVal = values[values.length - 1] || 0;
+            const color = lastVal >= 0 ? '#00c853' : '#ff1744';
+
+            pnlChart.data.labels = labels;
+            pnlChart.data.datasets[0].data = values;
+            pnlChart.data.datasets[0].borderColor = color;
+            pnlChart.data.datasets[0].backgroundColor = color + '22';
+            pnlChart.update('none');
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '--';
+            const d = new Date(ts);
+            return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+            document.getElementById('clockDisplay').textContent =
+                'IST: ' + ist.toLocaleTimeString('en-IN') + ' | ' +
+                ist.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+        }
+
+        function addLog(message, type = 'info') {
+            const panel = document.getElementById('logPanel');
+            const time = new Date().toLocaleTimeString('en-IN');
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.innerHTML = `<span class="log-time">${time}</span> <span class="log-${type}">${message}</span>`;
+            panel.prepend(div);
+            // Keep last 100 logs
+            while (panel.children.length > 100) panel.removeChild(panel.lastChild);
+        }
+
+        function showToast(msg) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 3000);
+        }
+    </script>
+</body>
+</html>
