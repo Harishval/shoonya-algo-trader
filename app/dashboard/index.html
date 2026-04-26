@@ -158,6 +158,11 @@
         .btn-stop { background: var(--red); color: #fff; }
         .btn-pause { background: var(--orange); color: #000; }
         .btn-exit { background: #333; color: var(--red); border: 1px solid var(--red); }
+        .btn-action { padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; border: none; font-weight: 600; }
+        .btn-action-exit { background: var(--red); color: #fff; }
+        .btn-action-reverse { background: var(--orange); color: #000; }
+        .btn-action-reenter { background: var(--green); color: #000; }
+        .btn-action:hover { opacity: 0.85; }
         .btn:hover { opacity: 0.85; transform: translateY(-1px); }
         .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
@@ -423,9 +428,33 @@
             </div>
         </div>
 
-        <!-- Active Positions -->
+        <!-- Broker Positions (All Account Positions) -->
         <div class="card full-width">
-            <h2>Active Positions</h2>
+            <h2>Broker Positions <span style="font-size:12px;color:var(--text-dim);font-weight:400">(All open positions in your account)</span></h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Exchange</th>
+                            <th>Side</th>
+                            <th>Qty</th>
+                            <th>Avg Price</th>
+                            <th>LTP</th>
+                            <th>P&L</th>
+                            <th style="text-align:center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="brokerPositionsBody">
+                        <tr><td colspan="8" style="text-align:center; color:var(--text-dim)">No open positions</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Algo Positions (Strategy-Managed) -->
+        <div class="card full-width">
+            <h2>Algo Positions <span style="font-size:12px;color:var(--text-dim);font-weight:400">(Strategy-managed trades)</span></h2>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -610,6 +639,32 @@
             }
         }
 
+        function exitPosition(tsym, exchange, netqty) {
+            if (confirm(`Exit position: ${tsym} (qty: ${Math.abs(netqty)})?`)) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'exit_position', tsym, exchange, netqty }));
+                }
+            }
+        }
+
+        function reversePosition(tsym, exchange, netqty) {
+            const direction = netqty > 0 ? 'SELL' : 'BUY';
+            if (confirm(`Reverse ${tsym}?\nWill exit current position and re-enter as ${direction} (qty: ${Math.abs(netqty)})`)) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'reverse_position', tsym, exchange, netqty }));
+                }
+            }
+        }
+
+        function reenterPosition(tsym, exchange, side, quantity) {
+            const qty = prompt(`Re-enter ${side} ${tsym}\nQuantity:`, quantity);
+            if (qty && parseInt(qty) > 0) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'reenter_position', tsym, exchange, side, quantity: parseInt(qty) }));
+                }
+            }
+        }
+
         function switchMode(mode) {
             if (mode === 'live') {
                 if (!confirm('Switch to LIVE trading? Real money will be used!')) return;
@@ -711,7 +766,35 @@
                 }
             }
 
-            // Active Positions
+            // Broker Positions (all account positions)
+            const brokerPos = data.broker_positions || [];
+            const bpBody = document.getElementById('brokerPositionsBody');
+            if (brokerPos.length === 0) {
+                bpBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-dim)">No open positions</td></tr>';
+            } else {
+                bpBody.innerHTML = brokerPos.map(p => {
+                    const pnlClass = (p.pnl || 0) >= 0 ? 'positive' : 'negative';
+                    const sideClass = p.side === 'BUY' ? 'positive' : 'negative';
+                    const escapedTsym = (p.tsym || '').replace(/'/g, "\\'");
+                    const escapedExch = (p.exchange || '').replace(/'/g, "\\'");
+                    return `<tr>
+                        <td style="font-weight:600">${p.tsym}</td>
+                        <td>${p.exchange}</td>
+                        <td class="${sideClass}" style="font-weight:600">${p.side}</td>
+                        <td>${Math.abs(p.netqty)}</td>
+                        <td>₹${(p.avg_price || 0).toFixed(2)}</td>
+                        <td>₹${(p.ltp || 0).toFixed(2)}</td>
+                        <td class="${pnlClass}">₹${(p.pnl || 0).toFixed(2)}</td>
+                        <td style="text-align:center">
+                            <button class="btn-action btn-action-exit" onclick="exitPosition('${escapedTsym}','${escapedExch}',${p.netqty})" title="Exit this position">Exit</button>
+                            <button class="btn-action btn-action-reverse" onclick="reversePosition('${escapedTsym}','${escapedExch}',${p.netqty})" title="Reverse position direction" style="margin-left:4px">Reverse</button>
+                            <button class="btn-action btn-action-reenter" onclick="reenterPosition('${escapedTsym}','${escapedExch}','${p.side}',${Math.abs(p.netqty)})" title="Re-enter same position" style="margin-left:4px">Re-enter</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+
+            // Algo Positions (strategy-managed)
             const active = data.strategy?.active_trades || [];
             const posBody = document.getElementById('positionsBody');
             if (active.length === 0) {

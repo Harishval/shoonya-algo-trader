@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.models.schemas import (
-    TradingMode, StrategyState, StrategyConfig, DashboardData,
+    TradingMode, StrategyState, StrategyConfig, DashboardData, OrderSide,
 )
 from app.strategy.risk_manager import RiskManager
 from app.strategy.otm_strategy import DirectionalOTMStrategy
@@ -125,6 +125,29 @@ async def strategy_loop():
                     if chain:
                         option_chains[inst] = [c.model_dump() for c in chain[:15]]
 
+                # Fetch ALL broker-level positions (not just algo)
+                broker_positions = []
+                try:
+                    raw_positions = broker.get_positions()
+                    for p in raw_positions:
+                        netqty = int(p.get("netqty", 0))
+                        if netqty == 0:
+                            continue
+                        broker_positions.append({
+                            "tsym": p.get("tsym", ""),
+                            "exchange": p.get("exch", p.get("exchange", "")),
+                            "netqty": netqty,
+                            "side": "BUY" if netqty > 0 else "SELL",
+                            "avg_price": float(p.get("netavgprc", p.get("avgprc", 0))),
+                            "ltp": float(p.get("lp", 0)),
+                            "pnl": float(p.get("urmtom", p.get("rpnl", 0))),
+                            "realized_pnl": float(p.get("rpnl", 0)),
+                            "product": p.get("prd", ""),
+                            "token": p.get("token", ""),
+                        })
+                except Exception as e:
+                    logger.error("Error fetching broker positions: %s", e)
+
                 # Determine broker type for login status
                 broker_type = type(broker).__name__
                 if broker_type == "ShoonyaBroker":
@@ -150,6 +173,7 @@ async def strategy_loop():
                     "risk": risk_manager.get_stats() if risk_manager else {},
                     "capital": settings.capital,
                     "broker_info": broker_info,
+                    "broker_positions": broker_positions,
                 }
                 await broadcast(dashboard)
 
@@ -224,6 +248,80 @@ async def handle_ws_message(msg: dict, ws: WebSocket):
             "type": "status",
             "message": status_msg,
         }))
+
+    elif action == "exit_position":
+        tsym = msg.get("tsym", "")
+        exchange = msg.get("exchange", "")
+        netqty = int(msg.get("netqty", 0))
+        if tsym and netqty != 0:
+            side = OrderSide.SELL if netqty > 0 else OrderSide.BUY
+            qty = abs(netqty)
+            order_id = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=side, quantity=qty, order_type="MKT",
+            )
+            if order_id:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Exit order placed for {tsym} qty={qty} (order: {order_id})",
+                }))
+            else:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Exit order FAILED for {tsym}",
+                }))
+
+    elif action == "reverse_position":
+        tsym = msg.get("tsym", "")
+        exchange = msg.get("exchange", "")
+        netqty = int(msg.get("netqty", 0))
+        if tsym and netqty != 0:
+            # First exit current position, then enter opposite
+            exit_side = OrderSide.SELL if netqty > 0 else OrderSide.BUY
+            qty = abs(netqty)
+            exit_oid = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=exit_side, quantity=qty, order_type="MKT",
+            )
+            # Now enter double quantity in opposite direction
+            entry_side = OrderSide.BUY if netqty < 0 else OrderSide.SELL
+            entry_oid = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=entry_side, quantity=qty, order_type="MKT",
+            )
+            if exit_oid and entry_oid:
+                direction = "BUY" if entry_side == OrderSide.BUY else "SELL"
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Reversed {tsym}: exited {qty}, re-entered {direction} {qty}",
+                }))
+            else:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Reverse order FAILED for {tsym}",
+                }))
+
+    elif action == "reenter_position":
+        tsym = msg.get("tsym", "")
+        exchange = msg.get("exchange", "")
+        side_str = msg.get("side", "BUY")
+        qty = int(msg.get("quantity", 0))
+        if tsym and qty > 0:
+            side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
+            order_id = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=side, quantity=qty, order_type="MKT",
+            )
+            if order_id:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Re-enter order placed: {side_str} {tsym} qty={qty} (order: {order_id})",
+                }))
+            else:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Re-enter order FAILED for {tsym}",
+                }))
 
     elif action == "get_state":
         state = strategy._get_state() if strategy else {}
