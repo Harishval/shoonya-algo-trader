@@ -1,7 +1,10 @@
 """Shoonya (Finvasia) broker integration using NorenRestApiPy."""
 
+import hashlib
+import json
 import logging
 import pyotp
+import requests
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -75,52 +78,115 @@ class ShoonyaBroker:
     def __init__(self):
         self.api = ShoonyaClient()
         self.is_logged_in = False
+        self.login_error = ""  # stores the last login error for display
         self._ws_connected = False
         self._market_data: Dict[str, MarketData] = {}
         self._callbacks: Dict[str, Any] = {}
+        self._last_prices: Dict[str, float] = {}  # cache last known prices
 
     def login(self) -> bool:
-        """Login to Shoonya using TOTP."""
-        try:
-            totp = pyotp.TOTP(settings.shoonya_totp_secret)
-            otp = totp.now()
+        """Login to Shoonya using TOTP.
 
-            ret = self.api.login(
-                userid=settings.shoonya_user_id,
-                password=settings.shoonya_password,
-                twoFA=otp,
-                vendor_code=settings.shoonya_vendor_code,
-                api_secret=settings.shoonya_api_secret,
-                imei=settings.shoonya_imei,
+        Makes a direct HTTP call first to capture the full error response,
+        since the NorenRestApiPy library returns None on failure.
+        """
+        self.login_error = ""
+        try:
+            logger.info(
+                "Attempting Shoonya login: user=%s, vendor=%s, imei=%s, totp_secret_len=%d",
+                settings.shoonya_user_id,
+                settings.shoonya_vendor_code,
+                settings.shoonya_imei,
+                len(settings.shoonya_totp_secret or ""),
             )
 
-            if ret is not None and ret.get("stat") == "Ok":
+            totp = pyotp.TOTP(settings.shoonya_totp_secret)
+            otp = totp.now()
+            logger.info("Generated TOTP OTP: %s", otp)
+
+            # Direct API call to capture full error response
+            pwd = hashlib.sha256(settings.shoonya_password.encode('utf-8')).hexdigest()
+            u_app_key = f"{settings.shoonya_user_id}|{settings.shoonya_api_secret}"
+            app_key = hashlib.sha256(u_app_key.encode('utf-8')).hexdigest()
+
+            values = {
+                "source": "API",
+                "apkversion": "1.0.0",
+                "uid": settings.shoonya_user_id,
+                "pwd": pwd,
+                "factor2": otp,
+                "vc": settings.shoonya_vendor_code,
+                "appkey": app_key,
+                "imei": settings.shoonya_imei,
+            }
+
+            url = f"{SHOONYA_HOST}QuickAuth"
+            payload = "jData=" + json.dumps(values)
+            logger.info("Login URL: %s", url)
+            logger.info("Login payload (masked): uid=%s, vc=%s, imei=%s",
+                         values["uid"], values["vc"], values["imei"])
+
+            res = requests.post(url, data=payload, timeout=15)
+            logger.info("Login HTTP status: %d", res.status_code)
+            logger.info("Login response: %s", res.text[:500])
+
+            ret = json.loads(res.text)
+
+            if ret.get("stat") == "Ok":
+                # Now do the actual library login to set up the session properly
+                lib_ret = self.api.login(
+                    userid=settings.shoonya_user_id,
+                    password=settings.shoonya_password,
+                    twoFA=otp,
+                    vendor_code=settings.shoonya_vendor_code,
+                    api_secret=settings.shoonya_api_secret,
+                    imei=settings.shoonya_imei,
+                )
                 self.is_logged_in = True
+                self.login_error = ""
                 logger.info("Shoonya login successful for user %s", settings.shoonya_user_id)
                 return True
             else:
-                error_msg = ret.get("emsg", "Unknown error") if ret else "No response"
+                error_msg = ret.get("emsg", "Unknown error")
+                self.login_error = error_msg
                 logger.error("Shoonya login failed: %s", error_msg)
+                logger.error("Full response: %s", ret)
                 return False
+        except requests.exceptions.ConnectionError as e:
+            self.login_error = "Cannot reach Shoonya API server. Check your internet connection."
+            logger.error("Shoonya connection error: %s", e)
+            return False
         except Exception as e:
-            logger.error("Shoonya login exception: %s", e)
+            self.login_error = str(e)
+            logger.error("Shoonya login exception: %s", e, exc_info=True)
             return False
 
     def get_underlying_ltp(self, instrument: str) -> Optional[float]:
-        """Get the last traded price of the underlying index."""
+        """Get the last traded price of the underlying index.
+
+        Caches the last known price so it's available when markets are closed.
+        Falls back to the close price field if the live price is unavailable.
+        """
         try:
             exchange = UNDERLYING_EXCHANGE.get(instrument, "NSE")
             token = UNDERLYING_TOKEN.get(instrument)
             if not token:
-                return None
+                return self._last_prices.get(instrument)
 
             ret = self.api.get_quotes(exchange=exchange, token=token)
             if ret and ret.get("stat") == "Ok":
-                return float(ret.get("lp", 0))
-            return None
+                # Try live price first, then close price
+                price = float(ret.get("lp", 0))
+                if price <= 0:
+                    price = float(ret.get("c", 0))  # close price
+                if price > 0:
+                    self._last_prices[instrument] = price
+                    return price
+
+            return self._last_prices.get(instrument)
         except Exception as e:
             logger.error("Error fetching LTP for %s: %s", instrument, e)
-            return None
+            return self._last_prices.get(instrument)
 
     def get_atm_strike(self, instrument: str, ltp: float) -> float:
         """Calculate the ATM strike from LTP."""

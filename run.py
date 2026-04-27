@@ -21,7 +21,7 @@ def main():
     ║  Max Loss : {loss}% daily{lpad}║
     ║  Instruments: {inst:<27s}║
     ╠═══════════════════════════════════════════╣
-    ║  Dashboard: http://{host}:{port:<19s}║
+    ║  Dashboard: http://{host}:{port:<19}║
     ╚═══════════════════════════════════════════╝
     """.format(
         mode=settings.trading_mode.upper(),

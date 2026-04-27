@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.models.schemas import (
-    TradingMode, StrategyState, StrategyConfig, DashboardData,
+    TradingMode, StrategyState, StrategyConfig, DashboardData, OrderSide,
 )
 from app.strategy.risk_manager import RiskManager
 from app.strategy.otm_strategy import DirectionalOTMStrategy
@@ -35,27 +35,57 @@ ws_clients: List[WebSocket] = []
 _strategy_task = None
 
 
-def init_broker():
-    """Initialize the appropriate broker based on trading mode."""
+def init_broker() -> str:
+    """Initialize the appropriate broker based on trading mode.
+
+    Returns a status message describing the result.
+    """
     global broker, strategy, risk_manager
 
+    status_msg = ""
     if settings.trading_mode == "live":
         from app.broker.shoonya_broker import ShoonyaBroker
         broker = ShoonyaBroker()
         success = broker.login()
         if not success:
-            logger.error("Live broker login failed — falling back to paper mode")
+            login_err = getattr(broker, 'login_error', 'Unknown')
+            logger.error("Live broker login failed — falling back to paper mode. Error: %s", login_err)
+            settings.trading_mode = "paper"
             from app.broker.paper_broker import PaperBroker
             broker = PaperBroker()
             broker.login()
+            status_msg = (
+                f"LIVE login failed — fell back to PAPER mode. "
+                f"Shoonya error: {login_err}"
+            )
+        else:
+            status_msg = "Connected to Shoonya LIVE"
     else:
+        # Paper mode — attempt Shoonya login for live price data
+        live_feed = None
         from app.broker.paper_broker import PaperBroker
-        broker = PaperBroker()
+        try:
+            from app.broker.shoonya_broker import ShoonyaBroker
+            feed_broker = ShoonyaBroker()
+            if feed_broker.login():
+                live_feed = feed_broker
+                logger.info("Paper mode: live Shoonya price feed connected")
+            else:
+                logger.info("Paper mode: Shoonya login failed — using simulated prices")
+        except Exception as e:
+            logger.info("Paper mode: could not initialize Shoonya feed (%s) — using simulated prices", e)
+
+        broker = PaperBroker(live_feed=live_feed)
         broker.login()
+        if broker.using_live_feed:
+            status_msg = "Paper trading mode active (LIVE Shoonya prices, simulated orders)"
+        else:
+            status_msg = "Paper trading mode active (simulated prices)"
 
     risk_manager = RiskManager()
     strategy = DirectionalOTMStrategy(broker, risk_manager)
     logger.info("Broker initialized in %s mode", settings.trading_mode)
+    return status_msg
 
 
 @asynccontextmanager
@@ -91,8 +121,11 @@ async def strategy_loop():
     """Background loop that ticks the strategy and broadcasts state."""
     while True:
         try:
-            if strategy and strategy.state == StrategyState.RUNNING:
-                state = strategy.tick()
+            if strategy:
+                if strategy.state == StrategyState.RUNNING:
+                    state = strategy.tick()
+                else:
+                    state = strategy._get_state()
 
                 # Build dashboard data
                 market_data = {}
@@ -107,6 +140,54 @@ async def strategy_loop():
                     if chain:
                         option_chains[inst] = [c.model_dump() for c in chain[:15]]
 
+                # Fetch ALL broker-level positions (not just algo)
+                broker_positions = []
+                try:
+                    raw_positions = broker.get_positions()
+                    for p in raw_positions:
+                        netqty = int(p.get("netqty", 0))
+                        if netqty == 0:
+                            continue
+                        broker_positions.append({
+                            "tsym": p.get("tsym", ""),
+                            "exchange": p.get("exch", p.get("exchange", "")),
+                            "netqty": netqty,
+                            "side": "BUY" if netqty > 0 else "SELL",
+                            "avg_price": float(p.get("netavgprc", p.get("avgprc", 0))),
+                            "ltp": float(p.get("lp", 0)),
+                            "pnl": float(p.get("urmtom", p.get("rpnl", 0))),
+                            "realized_pnl": float(p.get("rpnl", 0)),
+                            "product": p.get("prd", ""),
+                            "token": p.get("token", ""),
+                        })
+                except Exception as e:
+                    logger.error("Error fetching broker positions: %s", e)
+
+                # Determine broker type for login status
+                broker_type = type(broker).__name__
+                if broker_type == "ShoonyaBroker":
+                    broker_info = {
+                        "logged_in": broker.is_logged_in,
+                        "user_id": settings.shoonya_user_id if broker.is_logged_in else "",
+                        "broker": "Shoonya (Live)",
+                    }
+                else:
+                    using_live = getattr(broker, 'using_live_feed', False)
+                    if using_live:
+                        feed_user = getattr(broker._live_feed, 'api', None)
+                        feed_uid = settings.shoonya_user_id if feed_user else ""
+                        broker_info = {
+                            "logged_in": True,
+                            "user_id": f"Paper (live feed: {feed_uid})" if feed_uid else "Paper (live feed)",
+                            "broker": "Paper Trading (Live Prices)",
+                        }
+                    else:
+                        broker_info = {
+                            "logged_in": True,
+                            "user_id": "Paper Account",
+                            "broker": "Paper Trading (Simulated)",
+                        }
+
                 dashboard = {
                     "type": "dashboard_update",
                     "timestamp": datetime.now().isoformat(),
@@ -116,6 +197,8 @@ async def strategy_loop():
                     "option_chains": option_chains,
                     "risk": risk_manager.get_stats() if risk_manager else {},
                     "capital": settings.capital,
+                    "broker_info": broker_info,
+                    "broker_positions": broker_positions,
                 }
                 await broadcast(dashboard)
 
@@ -185,11 +268,85 @@ async def handle_ws_message(msg: dict, ws: WebSocket):
     elif action == "switch_mode":
         mode = msg.get("mode", "paper")
         settings.trading_mode = mode
-        init_broker()
+        status_msg = init_broker()
         await ws.send_text(json.dumps({
             "type": "status",
-            "message": f"Switched to {mode} mode",
+            "message": status_msg,
         }))
+
+    elif action == "exit_position":
+        tsym = msg.get("tsym", "")
+        exchange = msg.get("exchange", "")
+        netqty = int(msg.get("netqty", 0))
+        if tsym and netqty != 0:
+            side = OrderSide.SELL if netqty > 0 else OrderSide.BUY
+            qty = abs(netqty)
+            order_id = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=side, quantity=qty, order_type="MKT",
+            )
+            if order_id:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Exit order placed for {tsym} qty={qty} (order: {order_id})",
+                }))
+            else:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Exit order FAILED for {tsym}",
+                }))
+
+    elif action == "reverse_position":
+        tsym = msg.get("tsym", "")
+        exchange = msg.get("exchange", "")
+        netqty = int(msg.get("netqty", 0))
+        if tsym and netqty != 0:
+            # First exit current position, then enter opposite
+            exit_side = OrderSide.SELL if netqty > 0 else OrderSide.BUY
+            qty = abs(netqty)
+            exit_oid = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=exit_side, quantity=qty, order_type="MKT",
+            )
+            # Now enter double quantity in opposite direction
+            entry_side = OrderSide.BUY if netqty < 0 else OrderSide.SELL
+            entry_oid = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=entry_side, quantity=qty, order_type="MKT",
+            )
+            if exit_oid and entry_oid:
+                direction = "BUY" if entry_side == OrderSide.BUY else "SELL"
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Reversed {tsym}: exited {qty}, re-entered {direction} {qty}",
+                }))
+            else:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Reverse order FAILED for {tsym}",
+                }))
+
+    elif action == "reenter_position":
+        tsym = msg.get("tsym", "")
+        exchange = msg.get("exchange", "")
+        side_str = msg.get("side", "BUY")
+        qty = int(msg.get("quantity", 0))
+        if tsym and qty > 0:
+            side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
+            order_id = broker.place_order(
+                instrument="", symbol=tsym, exchange=exchange,
+                side=side, quantity=qty, order_type="MKT",
+            )
+            if order_id:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Re-enter order placed: {side_str} {tsym} qty={qty} (order: {order_id})",
+                }))
+            else:
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "message": f"Re-enter order FAILED for {tsym}",
+                }))
 
     elif action == "get_state":
         state = strategy._get_state() if strategy else {}
