@@ -1,10 +1,16 @@
-"""Paper trading simulator that mimics the Shoonya broker interface."""
+"""Paper trading simulator that mimics the Shoonya broker interface.
+
+When a live data feed (ShoonyaBroker instance) is supplied, price queries
+(get_underlying_ltp, get_option_chain, get_option_quote) are forwarded to
+the live feed so the paper strategy runs against real market data.
+Order fills remain simulated.
+"""
 
 import logging
 import uuid
 import random
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 from app.config import settings
 from app.models.schemas import (
@@ -41,9 +47,17 @@ LOT_SIZE = {
 
 
 class PaperBroker:
-    """Simulates broker operations for paper trading."""
+    """Simulates broker operations for paper trading.
 
-    def __init__(self):
+    Parameters
+    ----------
+    live_feed : optional
+        A logged-in ShoonyaBroker instance.  When provided, price data is
+        fetched from Shoonya's API so the paper strategy runs on real market
+        data.  Order fills are still simulated.
+    """
+
+    def __init__(self, live_feed: Any = None):
         self.is_logged_in = False
         self._positions: Dict[str, Position] = {}
         self._trades: List[Trade] = []
@@ -54,30 +68,52 @@ class PaperBroker:
         self._tick_count = 0
         self._price_trends: Dict[str, float] = {}  # momentum for each instrument
 
+        # Live data feed (ShoonyaBroker instance) — used for price data only
+        self._live_feed = live_feed
+        self.using_live_feed = live_feed is not None and getattr(live_feed, 'is_logged_in', False)
+        if self.using_live_feed:
+            logger.info("PaperBroker: using LIVE Shoonya price feed")
+        else:
+            logger.info("PaperBroker: using SIMULATED price feed")
+
     def login(self) -> bool:
         """Simulate login (always succeeds)."""
         self.is_logged_in = True
-        logger.info("Paper trading mode: login simulated")
+        feed_label = "live Shoonya feed" if self.using_live_feed else "simulated prices"
+        logger.info("Paper trading mode active (%s)", feed_label)
         return True
 
+    # ------------------------------------------------------------------
+    # Price data helpers — delegate to live feed when available
+    # ------------------------------------------------------------------
+
     def get_underlying_ltp(self, instrument: str) -> Optional[float]:
-        """Get simulated LTP with realistic price movement."""
+        """Get LTP — from live Shoonya feed if available, else simulated."""
+        if self.using_live_feed:
+            try:
+                ltp = self._live_feed.get_underlying_ltp(instrument)
+                if ltp is not None:
+                    self._simulated_prices[instrument] = ltp  # cache for fallback
+                    return ltp
+                logger.warning("Live feed returned None for %s — falling back to simulated", instrument)
+            except Exception as exc:
+                logger.warning("Live feed error for %s: %s — falling back to simulated", instrument, exc)
+
+        # ---------- fallback: simulated trending price ----------
         base = self._simulated_prices.get(instrument)
         if base is None:
             return None
 
         self._tick_count += 1
 
-        # Create trending price movement
         if instrument not in self._price_trends:
             self._price_trends[instrument] = 0.0
 
-        # Occasionally change trend direction
         if random.random() < 0.1:
             self._price_trends[instrument] = random.uniform(-0.3, 0.3)
 
         trend = self._price_trends[instrument]
-        noise = random.gauss(0, base * 0.0005)  # 0.05% noise
+        noise = random.gauss(0, base * 0.0005)
         movement = trend + noise
 
         new_price = base + movement
@@ -90,20 +126,29 @@ class PaperBroker:
         return round(ltp / gap) * gap
 
     def get_option_chain(self, instrument: str, expiry: str) -> List[OptionData]:
-        """Generate a simulated option chain."""
+        """Get option chain — from live feed if available, else simulated."""
+        if self.using_live_feed:
+            try:
+                chain = self._live_feed.get_option_chain(instrument, expiry)
+                if chain:
+                    return chain
+                logger.warning("Live feed returned empty chain for %s — falling back to simulated", instrument)
+            except Exception as exc:
+                logger.warning("Live feed chain error for %s: %s — falling back to simulated", instrument, exc)
+
+        # ---------- fallback: simulated option chain ----------
         ltp = self.get_underlying_ltp(instrument)
         if ltp is None:
             return []
 
         atm = self.get_atm_strike(instrument, ltp)
         gap = STRIKE_GAP.get(instrument, 50)
-        chain = []
+        chain: List[OptionData] = []
 
         for i in range(-10, 11):
             strike = atm + (i * gap)
             diff = abs(ltp - strike) / ltp
 
-            # Simulate realistic option premiums
             base_premium = max(5, ltp * 0.01 * (1 - diff * 5))
             time_value = random.uniform(5, 30)
 
@@ -137,7 +182,18 @@ class PaperBroker:
     def get_option_quote(
         self, instrument: str, strike: float, option_type: str, expiry: str
     ) -> Optional[Dict]:
-        """Get simulated quote for a specific option."""
+        """Get quote — from live feed if available, else simulated."""
+        if self.using_live_feed:
+            try:
+                quote = self._live_feed.get_option_quote(instrument, strike, option_type, expiry)
+                if quote is not None:
+                    return quote
+                logger.warning("Live feed returned None quote for %s %s%s — falling back to simulated",
+                               instrument, strike, option_type)
+            except Exception as exc:
+                logger.warning("Live feed quote error: %s — falling back to simulated", exc)
+
+        # ---------- fallback: simulated quote ----------
         ltp = self.get_underlying_ltp(instrument)
         if ltp is None:
             return None
@@ -280,7 +336,15 @@ class PaperBroker:
         }
 
     def get_current_expiry(self, instrument: str) -> str:
-        """Get nearest expiry date."""
+        """Get nearest expiry date — from live feed if available, else calculated."""
+        if self.using_live_feed:
+            try:
+                expiry = self._live_feed.get_current_expiry(instrument)
+                if expiry:
+                    return expiry
+            except Exception:
+                pass
+
         today = datetime.now()
         if instrument in ("SENSEX", "BANKEX"):
             target_day = 4  # Friday

@@ -61,10 +61,26 @@ def init_broker() -> str:
         else:
             status_msg = "Connected to Shoonya LIVE"
     else:
+        # Paper mode — attempt Shoonya login for live price data
+        live_feed = None
         from app.broker.paper_broker import PaperBroker
-        broker = PaperBroker()
+        try:
+            from app.broker.shoonya_broker import ShoonyaBroker
+            feed_broker = ShoonyaBroker()
+            if feed_broker.login():
+                live_feed = feed_broker
+                logger.info("Paper mode: live Shoonya price feed connected")
+            else:
+                logger.info("Paper mode: Shoonya login failed — using simulated prices")
+        except Exception as e:
+            logger.info("Paper mode: could not initialize Shoonya feed (%s) — using simulated prices", e)
+
+        broker = PaperBroker(live_feed=live_feed)
         broker.login()
-        status_msg = "Paper trading mode active (simulated prices)"
+        if broker.using_live_feed:
+            status_msg = "Paper trading mode active (LIVE Shoonya prices, simulated orders)"
+        else:
+            status_msg = "Paper trading mode active (simulated prices)"
 
     risk_manager = RiskManager()
     strategy = DirectionalOTMStrategy(broker, risk_manager)
@@ -156,11 +172,21 @@ async def strategy_loop():
                         "broker": "Shoonya (Live)",
                     }
                 else:
-                    broker_info = {
-                        "logged_in": True,
-                        "user_id": "Paper Account",
-                        "broker": "Paper Trading (Simulated)",
-                    }
+                    using_live = getattr(broker, 'using_live_feed', False)
+                    if using_live:
+                        feed_user = getattr(broker._live_feed, 'api', None)
+                        feed_uid = settings.shoonya_user_id if feed_user else ""
+                        broker_info = {
+                            "logged_in": True,
+                            "user_id": f"Paper (live feed: {feed_uid})" if feed_uid else "Paper (live feed)",
+                            "broker": "Paper Trading (Live Prices)",
+                        }
+                    else:
+                        broker_info = {
+                            "logged_in": True,
+                            "user_id": "Paper Account",
+                            "broker": "Paper Trading (Simulated)",
+                        }
 
                 dashboard = {
                     "type": "dashboard_update",
