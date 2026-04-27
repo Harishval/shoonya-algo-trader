@@ -48,16 +48,15 @@ def init_broker() -> str:
         broker = ShoonyaBroker()
         success = broker.login()
         if not success:
-            logger.error("Live broker login failed — falling back to paper mode")
+            login_err = getattr(broker, 'login_error', 'Unknown')
+            logger.error("Live broker login failed — falling back to paper mode. Error: %s", login_err)
             settings.trading_mode = "paper"
             from app.broker.paper_broker import PaperBroker
             broker = PaperBroker()
             broker.login()
             status_msg = (
-                "LIVE login failed — fell back to PAPER mode. "
-                "Check your Shoonya credentials in .env "
-                "(user_id, password, totp_secret, vendor_code, api_secret). "
-                "Markets may also be closed."
+                f"LIVE login failed — fell back to PAPER mode. "
+                f"Shoonya error: {login_err}"
             )
         else:
             status_msg = "Connected to Shoonya LIVE"
